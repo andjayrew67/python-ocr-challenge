@@ -1,0 +1,97 @@
+﻿# azure-functions==1.20.0
+
+# # PDF / Görüntü / OCR
+# PyMuPDF==1.23.8
+# Pillow==10.3.0
+# pytesseract==0.3.10
+
+# # DOCX / PPTX
+# python-docx==1.1.0
+# python-pptx==0.6.23
+
+# # Excel / CSV
+# openpyxl==3.1.2
+# xlrd==2.0.1
+
+# # HTML / RTF
+# beautifulsoup4==4.12.3
+# lxml==4.9.4
+# striprtf==0.0.26
+
+# # Tablo çıkarımı (opsiyonel)
+# pdfplumber==0.11.4
+# tabula-py==2.9.0
+# opencv-python==4.8.1.78
+
+# # OCR pre-pass (opsiyonel, sistem bağımlılıkları gerekir: ghostscript, qpdf)
+# ocrmypdf==16.4.0
+
+# opencv-python-headless==4.10.0.84
+
+azure-functions==1.20.0
+beautifulsoup4==4.12.3
+cffi==2.0.0
+charset-normalizer==3.4.4
+cryptography==46.0.3
+Deprecated==1.2.18
+deprecation==2.1.0
+distro==1.9.0
+easyocr==1.7.2
+et-xmlfile==2.0.0
+filelock==3.20.0
+fsspec==2025.9.0
+imageio==2.37.0
+img2pdf==0.6.1
+jinja2==3.1.6
+lazy-loader==0.4
+lxml==4.9.4
+markdown-it-py==4.0.0
+markupsafe==3.0.3
+mdurl==0.1.2
+mpmath==1.3.0
+networkx==3.5
+ninja==1.13.0
+numpy==1.26.4
+ocrmypdf==16.4.0
+opencv-python-headless==4.10.0.84
+opencv-python==4.8.1.78
+openpyxl==3.1.2
+packaging==25.0
+pandas==2.3.3
+pdfminer.six==20231228
+pdfplumber==0.11.4
+pi-heif==0.22.0
+pikepdf==10.0.0
+Pillow==10.3.0
+pluggy==1.6.0
+pyclipper==1.3.0.post6
+pycparser==2.23
+Pygments==2.19.2
+PyMuPDF==1.23.8
+PyMuPDFb==1.23.7
+pypdfium2==5.0.0
+pytesseract==0.3.10
+python-bidi==0.6.7
+python-dateutil==2.9.0.post0
+python-docx==1.1.0
+python-pptx==0.6.23
+pytz==2025.2
+PyYAML==6.0.3
+rich==14.2.0
+scikit-image==0.24.0
+scipy==1.16.3
+shapely==2.1.2
+six==1.17.0
+soupsieve==2.8
+striprtf==0.0.26
+sympy==1.14
+tabula-py==2.9.0
+tifffile==2025.10.16
+torch==2.9.0
+torchgen==0.0.1
+torchvision==0.24.0
+typing-extensions==4.15.0
+tzdata==2025.2
+wrapt==1.17.3
+xlrd==2.0.1
+xlsxwriter==3.2.9

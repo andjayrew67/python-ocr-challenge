@@ -1,0 +1,18 @@
+﻿{
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": [ "post" ],
+      "route": "extract/json"
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "$return"
+    }
+  ],
+  "scriptFile": "__init__.py"
+}

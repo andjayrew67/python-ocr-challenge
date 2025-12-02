@@ -1,0 +1,22 @@
+﻿{
+  "results": [
+    {
+      "filename": "tmp_fb0c94b7",
+      "mimetype": "text/html",
+      "errors": [],
+      "page_count": 1,
+      "pages": [
+        {
+          "page_number": 1,
+          "text": "Demo\nHello!\nThis is\nHTML\ntest.",
+          "ocr_text": "Demo\nHello!\nThis is\nHTML\ntest.",
+          "links": [],
+          "images": [],
+          "artifacts": {
+            "title": "Demo"
+          }
+        }
+      ]
+    }
+  ]
+}

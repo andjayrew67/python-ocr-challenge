@@ -35,6 +35,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Cleanup disk space before installing dependencies
+        run: |
+          docker system prune -af
+          rm -rf ~/.cache/pip
+          
       - name: install python dependencies
         shell: bash
         run: |

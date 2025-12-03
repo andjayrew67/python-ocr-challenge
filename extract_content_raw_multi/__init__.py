@@ -1,4 +1,4 @@
-# extract_content/__init__.py
+# extract_content_raw_multi/__init__.py
 import azure.functions as func
 import io, os, re, json, uuid, csv, tempfile, shutil, sys, time
 import fitz  # PyMuPDF
@@ -115,7 +115,6 @@ FOOTER_RATIO = 0.08
 OCR_DPI      = 400
 NONFOOTER_MIN_CHARS = 30
 FORCE_OCR_PAGES = set()
-
 # --- Regex'ler ---
 RE_FOOTER_LINE   = re.compile(r"^\s*(https?://\S+)\s*page\s+\d+\s+of\s+\d+\s*$", re.I)
 RE_MANY_NEWLINES = re.compile(r"\n{3,}")
@@ -181,62 +180,20 @@ def _preprocess_handwriting(img: Image.Image) -> Image.Image:
 
 def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
     g = ImageOps.grayscale(img)
-    g = ImageOps.autocontrast(g)  # düzeltme: 'g' üzerinde autocontrast
+    g = ImageOps.autocontrast(g)
     g = g.point(lambda p: 255 if p > 127 else 0)
     g = g.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
     return g
 
 def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6) -> str:
     g = _preprocess_for_ocr(img)
-    if not _tesseract_lang_available(lang):
-        lang = "eng"
-    best, best_len = "", 0
-    for p in (psm, 3, 4):  # mevcut psm + fallback
-        try:
-            tt = pytesseract.image_to_string(g, lang=lang, config=f"--oem 3 --psm {p}") or ""
-        except Exception:
-            tt = ""
-        clen = len(("".join(tt.split())) if tt else "")
-        if clen > best_len:
-            best, best_len = tt, clen
-    return (best or "").strip()
-
-
-def _collect_links(page: fitz.Page):
-    out = []
     try:
-        for ln in page.get_links() or []:
-            uri = ln.get("uri")
-            if uri: out.append({"target": uri})
-    except Exception: pass
-    return out
-
-def _footer_snapshot(page: fitz.Page, page_no: int) -> dict | None:
-    return None
-
-def _detect_footer_artifacts(links: list) -> dict:
-    footer = {}
-    if links: footer["link"] = links[0].get("target")
-    footer["logo"] = "vector"
-    return footer
-
-def _collect_form_fields(page: fitz.Page):
-    fields = []
-    try:
-        widgets = page.widgets()
-        for w in widgets:
-            name  = getattr(w, "field_name", None) or getattr(w, "name", None)
-            ftype = getattr(w, "field_type", None)
-            value = getattr(w, "field_value", None)
-            if value is None: value = getattr(w, "value", None)
-            rect  = getattr(w, "rect", None)
-            bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
-            fields.append({"name": name, "value": value})
-    except Exception: pass
-    return fields
+        t = pytesseract.image_to_string(g, lang=lang, config=f"--oem 3 --psm {psm}") or ""
+    except Exception:
+        t = ""
+    return (t or "").strip()
 
 def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang: str, ocrdpi: int, fast: bool):
-    t0 = time.perf_counter()
     with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as doc:
         page = doc.load_page(page_index_0)
         native = (page.get_text("text") or "").strip()
@@ -245,13 +202,11 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
         if not need_ocr and len(native) >= NONFOOTER_MIN_CHARS:
             links = _collect_links(page)
             footer_img = _footer_snapshot(page, page_index_0 + 1)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
             return {
                 "text": native,
                 "ocr_text": _normalize_text(native),
                 "links": links,
-                "footer_img": footer_img,
-                "elapsed_ms": elapsed_ms
+                "footer_img": footer_img
             }
 
         pix = page.get_pixmap(dpi=ocrdpi, alpha=False)
@@ -273,14 +228,46 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
         cleaned = _normalize_text("\n".join(merged))
         links = _collect_links(page)
         footer_img = _footer_snapshot(page, page_index_0 + 1)
-        elapsed_ms = int((time.perf_counter() - t0) * 1000)
         return {
             "text": native,
             "ocr_text": cleaned,
             "links": links,
-            "footer_img": footer_img,
-            "elapsed_ms": elapsed_ms
+            "footer_img": footer_img
         }
+
+def _collect_links(page: fitz.Page):
+    out = []
+    try:
+        for ln in page.get_links() or []:
+            uri = ln.get("uri")
+            if uri: out.append({"target": uri})
+    except Exception: pass
+    return out
+
+def _footer_snapshot(page: fitz.Page, page_no: int) -> dict | None:
+    # Image saving disabled
+    return None
+
+def _detect_footer_artifacts(links: list) -> dict:
+    footer = {}
+    if links: footer["link"] = links[0].get("target")
+    footer["logo"] = "vector"
+    return footer
+
+def _collect_form_fields(page: fitz.Page):
+    fields = []
+    try:
+        widgets = page.widgets()
+        for w in widgets:
+            name  = getattr(w, "field_name", None) or getattr(w, "name", None)
+            ftype = getattr(w, "field_type", None)
+            value = getattr(w, "field_value", None)
+            if value is None: value = getattr(w, "value", None)
+            rect  = getattr(w, "rect", None)
+            bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
+            fields.append({"name": name, "type": ftype, "value": value, "bbox": bbox})
+    except Exception: pass
+    return fields
 
 # ---------- Tür kontrol & çıkarıcılar ----------
 def _is_pdf(fname, ctype):  return (ctype == "application/pdf") or fname.lower().endswith(".pdf")
@@ -418,17 +405,7 @@ def _extract_html_bytes(data: bytes) -> dict:
     except Exception: text = data.decode("latin-1", errors="replace")
     try: soup = BeautifulSoup(text, "lxml")
     except Exception: soup = BeautifulSoup(text, "html.parser")
-
-    # Güvenli script/style/noscript temizliği
-    for el in soup.find_all(["script", "style", "noscript"]):
-        try:
-            el.decompose()
-        except Exception:
-            try:
-                el.extract()
-            except Exception:
-                pass
-
+    for tag in soup(["script","style","noscript"]): tag.decompose()
     extracted = soup.get_text(separator="\n")
     extracted = "\n".join([ln.strip() for ln in extracted.splitlines() if ln.strip()])
     extracted = _normalize_text(extracted)
@@ -550,6 +527,7 @@ def _extract_tables_from_page(doc_bytes: bytes, page_num_1: int, engine: str):
 
 # ---------- PDF resimleri çıkar ----------
 def _extract_images_from_page(doc_bytes: bytes, page_num_1: int):
+    # Image saving disabled
     return []
 
 # ---------- Çoklu multipart okuma ----------
@@ -604,23 +582,14 @@ def _parse_multipart(req: func.HttpRequest, field_names=("files", "file")):
 # ---------- Azure Function ----------
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
-    Query:
-      - ?forceocr=true|false
-      - ?fast=1
-      - ?ocrdpi=320
-      - ?lang=eng|tur|...
-      - ?pages=1-3,5
-      - ?workers=4
-      - ?preocr=1
-      - ?tables=camelot|plumber
-      - ?tables_out=csv|json|both
-      - ?images=1   (PDF embeeded raster'ları artifacts klasörüne çıkar)
+    Multi-file raw text extraction endpoint.
+    Query params same as single file.
     """
     try:
         t0_total = time.perf_counter()
 
         # Query params
-        forceocr = False; fast = False; lang = "eng"; pages_arg = None; ocrdpi = OCR_DPI
+        forceocr = True; fast = False; lang = "eng"; pages_arg = None; ocrdpi = 400
         workers = None; preocr = False; tables_engine = None; tables_out = None; want_images = False
         if "?" in req.url:
             from urllib.parse import parse_qs
@@ -633,8 +602,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             tables_engine = (qs.get("tables", [None])[0] or None)
             tables_out = (qs.get("tables_out", [None])[0] or None)
             want_images = str(qs.get("images", ["0"])[0]).lower() in {"1","true","yes"}
-            try: ocrdpi = int(qs.get("ocrdpi", [str(OCR_DPI)])[0])
-            except Exception: ocrdpi = OCR_DPI
+            try: ocrdpi = int(qs.get("ocrdpi", [str(400)])[0])
+            except Exception: ocrdpi = 400
             try:
                 w = qs.get("workers", [None])[0]
                 workers = int(w) if w else None
@@ -656,34 +625,52 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return sorted(wanted)
 
         files = _parse_multipart(req, field_names=("files", "file"))
-        if len(files) != 1:
-            return func.HttpResponse("Single file endpoint: exactly one file required.", status_code=400)
+        if len(files) > 10:
+            return func.HttpResponse("Too many files. Maximum 10 allowed.", status_code=400)
 
-        f = files[0]
-        fname = f.get("filename") or f"tmp_{uuid.uuid4().hex[:8]}"
-        ctype = (f.get("content_type") or "").lower()
-        data = f.get("data") or b""
-        file_size_mb = len(data) / (1024 * 1024)
+        response_list = []
 
-        # Validation
-        if file_size_mb > 100:
-            return func.HttpResponse("File size exceeds 100 MB limit.", status_code=500)
+        for f in files:
+            fname = f.get("filename") or f"tmp_{uuid.uuid4().hex[:8]}"
+            ctype = (f.get("content_type") or "").lower()
+            data = f.get("data") or b""
+            file_size_mb = len(data) / (1024 * 1024)
 
-        if _is_pdf(fname, ctype):
+            file_result = {
+                "fileName": fname,
+                "fileSize": round(file_size_mb, 2),
+                "fileContent": None,
+                "status": "Completed",
+                "error": None
+            }
+
+            # Validation
+            if file_size_mb > 100:
+                file_result["status"] = "Failed"
+                file_result["error"] = "File size exceeds 100 MB limit."
+                response_list.append(file_result)
+                continue
+
+            if _is_pdf(fname, ctype):
+                try:
+                    with fitz.open(stream=io.BytesIO(data), filetype="pdf") as doc_tmp:
+                        total_pages = doc_tmp.page_count
+                except Exception:
+                    file_result["status"] = "Failed"
+                    file_result["error"] = "Invalid PDF file."
+                    response_list.append(file_result)
+                    continue
+                if total_pages > 500:
+                    file_result["status"] = "Failed"
+                    file_result["error"] = "PDF has more than 500 pages."
+                    response_list.append(file_result)
+                    continue
+
+            # Process file (similar to single file logic)
             try:
-                with fitz.open(stream=io.BytesIO(data), filetype="pdf") as doc_tmp:
-                    total_pages = doc_tmp.page_count
-            except Exception:
-                return func.HttpResponse("Invalid PDF file.", status_code=500)
-            if total_pages > 500:
-                return func.HttpResponse("PDF has more than 500 pages.", status_code=500)
+                file_parts = []
+                file_parts.append(f"===File: {fname}===")
 
-        out_results = []
-
-        # Process the single file
-        file_result = {"filename": fname, "mimetype": ctype or None, "errors": []}
-
-        try:
                 if _is_pdf(fname, ctype):
                     doc_bytes = data
                     if preocr:
@@ -694,17 +681,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as doc_tmp:
                             total_pages = doc_tmp.page_count
                     except Exception as e:
-                        file_result["errors"].append(f"PDF open/process failed: {e}")
-                        out_results.append(file_result)
-                        result = {"results": out_results}
-                        resp = func.HttpResponse(json.dumps(result, ensure_ascii=False, indent=2),
-                                                 mimetype="application/json; charset=utf-8")
-                        total_ms = int((time.perf_counter() - t0_total) * 1000)
-                        resp.headers["X-Debug-Parts"] = str(len(out_results))
-                        resp.headers["X-Perf-TotalMs"] = str(total_ms)
-                        resp.headers["X-Perf-Workers"] = str(workers or os.cpu_count() or 2)
-                        resp.headers["X-Perf-OCRDPI"] = str(ocrdpi)
-                        return resp
+                        file_result["status"] = "Failed"
+                        file_result["error"] = f"PDF open/process failed: {e}"
+                        response_list.append(file_result)
+                        continue
 
                     indices = _expand_pages(pages_arg, total_pages)
                     pages_json = []
@@ -720,27 +700,25 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             try:
                                 res = fut.result()
                             except Exception as e:
-                                res = {"text":"", "ocr_text":"", "links":[], "footer_img":None, "elapsed_ms": None}
-                                file_result["errors"].append(f"Page {i+1} error: {e}")
+                                res = {"text":"","ocr_text":"","links":[], "footer_img":None}
+                                file_parts.append(f"(Page {i+1} error: {e})")
                             try:
                                 with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as dd:
                                     p = dd.load_page(i)
                                     form_fields = _collect_form_fields(p)
-                                    artifacts = {"footer": _detect_footer_artifacts(res.get("links", []))}
                             except Exception:
-                                form_fields = []; artifacts = {"footer": {}}
-
+                                form_fields = []
+                            
                             page_obj = {
                                 "page_number": i + 1,
                                 "text": res.get("text",""),
                                 "ocr_text": res.get("ocr_text",""),
                                 "links": res.get("links", []),
                                 "images": [res.get("footer_img")] if res.get("footer_img") else [],
-                                "artifacts": artifacts,
-                                "form_fields": form_fields,
-                                "perf_ms": res.get("elapsed_ms")
+                                "form_fields": form_fields
                             }
 
+                            # (opsiyonel) images: embeeded raster export
                             if want_images:
                                 imgs = _extract_images_from_page(doc_bytes, i+1)
                                 page_obj.setdefault("images", []).extend(imgs)
@@ -749,6 +727,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                     pages_json.sort(key=lambda x: x["page_number"])
 
+                    # (opsiyonel) tablo çıkarımı - CSV saving disabled
                     if tables_engine in {"camelot","plumber"}:
                         for pj in pages_json:
                             tinfo = _extract_tables_from_page(doc_bytes, pj["page_number"], tables_engine)
@@ -757,62 +736,169 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                                 if tables_out in {"json", "both"}:
                                     pj["tables"] = tables
 
-                    file_result.update({"page_count": total_pages, "pages": pages_json})
+                    # sayfaları sırala ve yaz
+                    pages_sorted = sorted(pages_json, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        form_fields = pj.get("form_fields", [])
+                        if form_fields:
+                            form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
+                            # Replace the form part in raw_text with structured form_str
+                            lines = raw_text.split('\n')
+                            try:
+                                # Find the start of form content (assuming "Gender" is the first form label)
+                                idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
+                                header = '\n'.join(lines[:idx])
+                                raw_text = header + '\n' + form_str
+                            except StopIteration:
+                                # If "Gender" not found, replace whole text with form_str
+                                raw_text = form_str
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_pptx(fname, ctype):
                     res = _extract_pptx_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_docx(fname, ctype):
                     res = _extract_docx_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_excel(fname, ctype):
                     res = _extract_excel_bytes(data, fname)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_csv(fname, ctype):
                     res = _extract_csv_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_html(fname, ctype):
                     res = _extract_html_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_rtf(fname, ctype):
                     res = _extract_rtf_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_txt(fname, ctype):
                     res = _extract_txt_bytes(data)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 elif _is_image(fname, ctype):
                     res = _extract_image_bytes_with_ocr(data, lang=lang)
-                    if res.get("errors"): file_result["errors"].extend(res["errors"])
-                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+                    if res.get("errors"):
+                        file_result["status"] = "Failed"
+                        file_result["error"] = "; ".join(res["errors"])
+                        response_list.append(file_result)
+                        continue
+                    pages = res["pages"]
+                    pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                    for pj in pages_sorted:
+                        pno = pj.get("page_number")
+                        raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
 
                 else:
-                    file_result["errors"].append("Not yet implemented (other formats).")
+                    file_result["status"] = "Failed"
+                    file_result["error"] = "Not yet implemented (other formats)."
+                    response_list.append(file_result)
+                    continue
 
-        except Exception as e:
-            file_result["errors"].append(f"Router error: {e}")
+                raw_out = "\n".join(file_parts) + "\n"
+                file_result["fileContent"] = raw_out
 
-        out_results.append(file_result)
+            except Exception as e:
+                file_result["status"] = "Failed"
+                file_result["error"] = f"Processing error: {e}"
 
-        result = {"results": out_results}
-        resp = func.HttpResponse(json.dumps(result, ensure_ascii=False, indent=2),
-                                 mimetype="application/json; charset=utf-8")
-        # Perf header'ları
+            response_list.append(file_result)
+
+        # Build plain text response
+        parts = []
+        for fr in response_list:
+            parts.append(f"fileName: {fr['fileName']}")
+            parts.append(f"fileSize: {fr['fileSize']}")
+            parts.append(f"fileContent: {fr['fileContent']}")
+            parts.append(f"status: {fr['status']}")
+            parts.append(f"error: {fr['error']}")
+            parts.append("")  # blank line between files
+
+        raw_out = "\n".join(parts)
+        resp = func.HttpResponse(raw_out, status_code=200, mimetype="text/plain; charset=utf-8")
+
+        # Perf headers
         total_ms = int((time.perf_counter() - t0_total) * 1000)
-        resp.headers["X-Debug-Parts"] = str(len(out_results))
+        resp.headers["X-Debug-Parts"] = str(len(response_list))
         resp.headers["X-Perf-TotalMs"] = str(total_ms)
         resp.headers["X-Perf-Workers"] = str(workers or os.cpu_count() or 2)
         resp.headers["X-Perf-OCRDPI"] = str(ocrdpi)

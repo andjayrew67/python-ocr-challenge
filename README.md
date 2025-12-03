@@ -60,9 +60,11 @@ Notes:
 ## Azure Functions (local)
 
 This project contains multiple Azure Functions:
-- `extract_content` -> POST /api/extract/json (JSON output)
-- `extract_content_raw` -> POST /api/extract/raw (RAW text output)
-- `router` -> POST /api/router?mode=json|raw (delegates to above)
+- `extract_content` -> POST /api/extract/json (JSON output for single file)
+- `extract_content_raw` -> POST /api/extract/raw (RAW text output for single file)
+- `extract_content_multi` -> POST /api/extract/json/multi (JSON output for multiple files)
+- `extract_content_raw_multi` -> POST /api/extract/raw/multi (RAW text output for multiple files)
+- `router` -> POST /api/router?mode=json|raw (delegates to single file endpoints)
 
 Start the local host (you need Azure Functions Core Tools installed):
 
@@ -92,6 +94,8 @@ curl.exe -v -X POST "http://localhost:7071/api/router?mode=json&fast=1&lang=eng"
 
 The functions accept many query params (see function sources):
 - forceocr, fast, ocrdpi, lang, pages, workers, preocr, tables (camelot|plumber), tables_out (csv|json|both), images
+
+All endpoints validate file size (max 100 MB) and PDF page count (max 500 pages). Single file endpoints return 500 on validation failure, multi-file endpoints set status "Failed" per file.
 
 ---
 
@@ -146,8 +150,10 @@ The function will return a JSON payload describing pages and extracted content.
 
 - `pdf_extractor.py` — CLI & core extraction logic
 - `extract_file_content.py` — wrapper for file-bytes extraction
-- `extract_content` (folder) — Azure Function returning JSON
-- `extract_content_raw` (folder) — Azure Function returning RAW text
+- `extract_content` (folder) — Azure Function returning JSON for single file
+- `extract_content_raw` (folder) — Azure Function returning RAW text for single file
+- `extract_content_multi` (folder) — Azure Function returning JSON for multiple files
+- `extract_content_raw_multi` (folder) — Azure Function returning RAW text for multiple files
 - `router` — lightweight router that delegates to json/raw extractors
 - `requirements.txt` — Python dependencies (core + optional)
 

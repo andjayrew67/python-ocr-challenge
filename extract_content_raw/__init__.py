@@ -116,7 +116,6 @@ FOOTER_RATIO = 0.08
 OCR_DPI      = 400
 NONFOOTER_MIN_CHARS = 30
 FORCE_OCR_PAGES = set()
-ARTIFACT_DIR = "artifacts"
 
 # --- Regex'ler ---
 RE_FOOTER_LINE   = re.compile(r"^\s*(https?://\S+)\s*page\s+\d+\s+of\s+\d+\s*$", re.I)
@@ -128,10 +127,6 @@ RE_GARBAGE_LINE  = re.compile(r"(?m)^\s*(?:[+•·oO]|—|–|_#|,|;|:|\.)\s*$|^
 _BOUNDARY_RE     = re.compile(r'boundary=(?:"([^"]+)"|([^;]+))', re.I)
 
 # ---------- Yardımcılar ----------
-def _ensure_artifact_dir():
-    try: os.makedirs(ARTIFACT_DIR, exist_ok=True)
-    except Exception: pass
-
 def _strip_footer_and_garbage(text: str) -> str:
     if not text: return ""
     kept = []
@@ -188,7 +183,7 @@ def _non_footer_text_len(page: fitz.Page) -> int:
 def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
     g = ImageOps.grayscale(img)
     g = ImageOps.autocontrast(g)
-    g = g.point(lambda p: 255 if p > 175 else 0)
+    g = g.point(lambda p: 255 if p > 127 else 0)
     g = g.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
     return g
 
@@ -252,20 +247,7 @@ def _collect_links(page: fitz.Page):
     return out
 
 def _footer_snapshot(page: fitz.Page, page_no: int) -> dict | None:
-    try:
-        r = page.rect
-        footer_rect = fitz.Rect(r.x0, r.y1 - r.height * FOOTER_RATIO, r.x1, r.y1)
-        if footer_rect.height < 10: return None
-        mat = fitz.Matrix(2, 2)
-        pix = page.get_pixmap(matrix=mat, clip=footer_rect, alpha=False)
-        if pix.width < 10 or pix.height < 10: return None
-        _ensure_artifact_dir()
-        fname = f"p{page_no:02d}_footer_logo_{uuid.uuid4().hex[:6]}.png"
-        fpath = os.path.join(ARTIFACT_DIR, fname)
-        pix.save(fpath)
-        return {"file": fname, "width": pix.width, "height": pix.height, "note": "footer logo snapshot (rasterized)"}
-    except Exception:
-        return None
+    return None
 
 def _detect_footer_artifacts(links: list) -> dict:
     footer = {}
@@ -545,27 +527,7 @@ def _extract_tables_from_page(doc_bytes: bytes, page_num_1: int, engine: str):
 
 # ---------- PDF resimleri çıkar ----------
 def _extract_images_from_page(doc_bytes: bytes, page_num_1: int):
-    out = []
-    try:
-        with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as d:
-            p = d.load_page(page_num_1-1)
-            img_list = p.get_images(full=True) or []
-            _ensure_artifact_dir()
-            for idx, im in enumerate(img_list, start=1):
-                xref = im[0]
-                try:
-                    pix = fitz.Pixmap(d, xref)
-                    if pix.n >= 5:  # CMYK vb → RGB
-                        pix = fitz.Pixmap(fitz.csRGB, pix)
-                    fname = f"img_p{page_num_1:02d}_i{idx}_{uuid.uuid4().hex[:6]}.png"
-                    fpath = os.path.join(ARTIFACT_DIR, fname)
-                    pix.save(fpath)
-                    out.append({"file": fname, "width": pix.width, "height": pix.height, "note": "embedded raster"})
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return out
+    return []
 
 # ---------- Çoklu multipart okuma ----------
 def _parse_multipart(req: func.HttpRequest, field_names=("files", "file")):
@@ -672,15 +634,34 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return sorted(wanted)
 
         files = _parse_multipart(req, field_names=("files", "file"))
+        if len(files) != 1:
+            return func.HttpResponse("Single file endpoint: exactly one file required.", status_code=400)
+
+        f = files[0]
+        fname = f.get("filename") or f"tmp_{uuid.uuid4().hex[:8]}"
+        ctype = (f.get("content_type") or "").lower()
+        data = f.get("data") or b""
+        file_size_mb = len(data) / (1024 * 1024)
+
+        # Validation
+        if file_size_mb > 100:
+            return func.HttpResponse("File size exceeds 100 MB limit.", status_code=500)
+
+        if _is_pdf(fname, ctype):
+            try:
+                with fitz.open(stream=io.BytesIO(data), filetype="pdf") as doc_tmp:
+                    total_pages = doc_tmp.page_count
+            except Exception:
+                return func.HttpResponse("Invalid PDF file.", status_code=500)
+            if total_pages > 500:
+                return func.HttpResponse("PDF has more than 500 pages.", status_code=500)
+
         out_results = []
 
-        for f in files:
-            fname = f.get("filename") or f"tmp_{uuid.uuid4().hex[:8]}"
-            ctype = (f.get("content_type") or "").lower()
-            data = f.get("data") or b""
-            file_result = {"filename": fname, "mimetype": ctype or None, "errors": []}
+        # Process the single file
+        file_result = {"filename": fname, "mimetype": ctype or None, "errors": []}
 
-            try:
+        try:
                 if _is_pdf(fname, ctype):
                     doc_bytes = data
                     if preocr:
@@ -692,7 +673,47 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             total_pages = doc_tmp.page_count
                     except Exception as e:
                         file_result["errors"].append(f"PDF open/process failed: {e}")
-                        out_results.append(file_result); continue
+                        out_results.append(file_result)
+                        parts = []
+                        for fr in out_results:
+                            fname = fr.get("filename") or "file"
+                            pages = fr.get("pages") or []
+                            parts.append(f"===File: {fname}===")
+                            if not pages:
+                                errs = fr.get("errors") or []
+                                if errs:
+                                    parts.append(f"(no pages) Errors: {', '.join(errs)}")
+                                continue
+                            # sayfaları sırala ve yaz
+                            pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
+                            for pj in pages_sorted:
+                                pno = pj.get("page_number")
+                                raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                                form_fields = pj.get("form_fields", [])
+                                if form_fields:
+                                    form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
+                                    # Replace the form part in raw_text with structured form_str
+                                    lines = raw_text.split('\n')
+                                    try:
+                                        # Find the start of form content (assuming "Gender" is the first form label)
+                                        idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
+                                        header = '\n'.join(lines[:idx])
+                                        raw_text = header + '\n' + form_str
+                                    except StopIteration:
+                                        # If "Gender" not found, replace whole text with form_str
+                                        raw_text = form_str
+                                parts.append(f"===Page {pno}===\n{raw_text}\n")
+
+                        raw_out = "\n".join(parts) + "\n"
+                        resp = func.HttpResponse(raw_out, status_code=200, mimetype="text/plain; charset=utf-8")
+
+                        # PERF headers
+                        total_ms = int((time.perf_counter() - t0_total) * 1000)
+                        resp.headers["X-Perf-TotalMs"] = str(total_ms)
+                        resp.headers["X-Perf-Workers"] = str(workers or os.cpu_count() or 2)
+                        resp.headers["X-Perf-OCRDPI"]  = str(ocrdpi)
+                        resp.headers["X-Debug-Parts"]  = str(len(out_results))
+                        return resp
 
                     indices = _expand_pages(pages_arg, total_pages)
                     pages_json = []
@@ -745,19 +766,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             if tables:
                                 if tables_out in {"json", "both"}:
                                     pj["tables"] = tables
-                                if tables_out in {"csv", "both"}:
-                                    _ensure_artifact_dir()
-                                    for t_idx, tb in enumerate(tables, start=1):
-                                        rows = tb.get("rows", [])
-                                        fname_csv = f"tables_p{pj['page_number']:02d}_t{t_idx}_{uuid.uuid4().hex[:6]}.csv"
-                                        fpath = os.path.join(ARTIFACT_DIR, fname_csv)
-                                        try:
-                                            with open(fpath, "w", newline="", encoding="utf-8") as cf:
-                                                w = csv.writer(cf)
-                                                for r in rows: w.writerow(r)
-                                            pj.setdefault("table_files", []).append(fname_csv)
-                                        except Exception:
-                                            pass
 
                     file_result.update({"page_count": total_pages, "pages": pages_json})
 
@@ -804,10 +812,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 else:
                     file_result["errors"].append("Not yet implemented (other formats).")
 
-            except Exception as e:
-                file_result["errors"].append(f"Router error: {e}")
+        except Exception as e:
+            file_result["errors"].append(f"Router error: {e}")
 
-            out_results.append(file_result)
+        out_results.append(file_result)
 
         parts = []
         for fr in out_results:

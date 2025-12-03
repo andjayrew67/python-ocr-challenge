@@ -286,8 +286,6 @@ def _collect_form_fields(page: fitz.Page):
             bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
             fields.append({"name": name, "type": ftype, "value": value, "bbox": bbox})
     except Exception: pass
-
-    print(fields)
     return fields
 
 # ---------- Tür kontrol & çıkarıcılar ----------
@@ -826,6 +824,19 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             for pj in pages_sorted:
                 pno = pj.get("page_number")
                 raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
+                form_fields = pj.get("form_fields", [])
+                if form_fields:
+                    form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
+                    # Replace the form part in raw_text with structured form_str
+                    lines = raw_text.split('\n')
+                    try:
+                        # Find the start of form content (assuming "Gender" is the first form label)
+                        idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
+                        header = '\n'.join(lines[:idx])
+                        raw_text = header + '\n' + form_str
+                    except StopIteration:
+                        # If "Gender" not found, replace whole text with form_str
+                        raw_text = form_str
                 parts.append(f"===Page {pno}===\n{raw_text}\n")
 
         raw_out = "\n".join(parts) + "\n"

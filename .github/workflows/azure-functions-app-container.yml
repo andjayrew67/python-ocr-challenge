@@ -30,22 +30,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Setup Python ${{ env.PYTHON_VERSION }} Environment
-        uses: actions/setup-python@v1
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      # - name: Setup Python ${{ env.PYTHON_VERSION }} Environment
+      #   uses: actions/setup-python@v1
+      #   with:
+      #     python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cleanup disk space before installing dependencies
-        run: |
-          docker system prune -af
-          rm -rf ~/.cache/pip
+      # - name: Cleanup disk space before installing dependencies
+      #   run: |
+      #     docker system prune -af
+      #     rm -rf ~/.cache/pip
           
-      - name: install python dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest-cov
+      # - name: install python dependencies
+      #   shell: bash
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     pip install -r requirements.txt
+      #     pip install pytest-cov
 
       - name: Azure login
         uses: azure/login@v2

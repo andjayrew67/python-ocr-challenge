@@ -276,8 +276,7 @@ def _detect_footer_artifacts(links: list) -> dict:
 def _collect_form_fields(page: fitz.Page):
     fields = []
     try:
-        widgets = getattr(page, "widgets", None)
-        if not widgets: return fields
+        widgets = page.widgets()
         for w in widgets:
             name  = getattr(w, "field_name", None) or getattr(w, "name", None)
             ftype = getattr(w, "field_type", None)
@@ -287,6 +286,8 @@ def _collect_form_fields(page: fitz.Page):
             bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
             fields.append({"name": name, "type": ftype, "value": value, "bbox": bbox})
     except Exception: pass
+
+    print(fields)
     return fields
 
 # ---------- Tür kontrol & çıkarıcılar ----------
@@ -718,7 +719,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                                     artifacts = {"footer": _detect_footer_artifacts(res.get("links", []))}
                             except Exception:
                                 form_fields = []; artifacts = {"footer": {}}
-
+                            
                             page_obj = {
                                 "page_number": i + 1,
                                 "text": res.get("text",""),

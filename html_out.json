@@ -11,10 +11,7 @@
           "text": "Demo\nHello!\nThis is\nHTML\ntest.",
           "ocr_text": "Demo\nHello!\nThis is\nHTML\ntest.",
           "links": [],
-          "images": [],
-          "artifacts": {
-            "title": "Demo"
-          }
+          "images": []
         }
       ]
     }

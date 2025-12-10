@@ -754,7 +754,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             except StopIteration:
                                 # If "Gender" not found, replace whole text with form_str
                                 raw_text = form_str
-                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
+                        file_parts.append(f"---Page {pno}===\n{raw_text}\n")
 
                 elif _is_pptx(fname, ctype):
                     res = _extract_pptx_bytes(data)
@@ -768,7 +768,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     for pj in pages_sorted:
                         pno = pj.get("page_number")
                         raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
-                        file_parts.append(f"===Page {pno}===\n{raw_text}\n")
+                        file_parts.append(f"---Page {pno} Text---\n{raw_text}\n")
 
                 elif _is_docx(fname, ctype):
                     res = _extract_docx_bytes(data)
@@ -883,18 +883,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             response_list.append(file_result)
 
-        # Build plain text response
-        parts = []
-        for fr in response_list:
-            parts.append(f"fileName: {fr['fileName']}")
-            parts.append(f"fileSize: {fr['fileSize']}")
-            parts.append(f"fileContent: {fr['fileContent']}")
-            parts.append(f"status: {fr['status']}")
-            parts.append(f"error: {fr['error']}")
-            parts.append("")  # blank line between files
-
-        raw_out = "\n".join(parts)
-        resp = func.HttpResponse(raw_out, status_code=200, mimetype="text/plain; charset=utf-8")
+        # Build JSON response
+        resp = func.HttpResponse(json.dumps(response_list, ensure_ascii=False), status_code=200, mimetype="application/json; charset=utf-8")
 
         # Perf headers
         total_ms = int((time.perf_counter() - t0_total) * 1000)

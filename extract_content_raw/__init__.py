@@ -702,18 +702,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                                     except StopIteration:
                                         # If "Gender" not found, replace whole text with form_str
                                         raw_text = form_str
-                                parts.append(f"===Page {pno}===\n{raw_text}\n")
+                                parts.append(f"---Page {pno} Text---\n{raw_text}\n")
 
                         raw_out = "\n".join(parts) + "\n"
-                        resp = func.HttpResponse(raw_out, status_code=200, mimetype="text/plain; charset=utf-8")
-
-                        # PERF headers
-                        total_ms = int((time.perf_counter() - t0_total) * 1000)
-                        resp.headers["X-Perf-TotalMs"] = str(total_ms)
-                        resp.headers["X-Perf-Workers"] = str(workers or os.cpu_count() or 2)
-                        resp.headers["X-Perf-OCRDPI"]  = str(ocrdpi)
-                        resp.headers["X-Debug-Parts"]  = str(len(out_results))
-                        return resp
 
                     indices = _expand_pages(pages_arg, total_pages)
                     pages_json = []
@@ -845,10 +836,18 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     except StopIteration:
                         # If "Gender" not found, replace whole text with form_str
                         raw_text = form_str
-                parts.append(f"===Page {pno}===\n{raw_text}\n")
+                parts.append(f"---Page {pno} Text---\n{raw_text}\n")
 
         raw_out = "\n".join(parts) + "\n"
-        resp = func.HttpResponse(raw_out, status_code=200, mimetype="text/plain; charset=utf-8")
+        file_size_mb = len(data) / (1024 * 1024)
+        result = {
+            "fileName": fname,
+            "fileSize": round(file_size_mb, 2),
+            "status": "Completed" if not file_result.get("errors") else "Failed",
+            "error": "; ".join(file_result.get("errors", [])) if file_result.get("errors") else "",
+            "content": raw_out
+        }
+        resp = func.HttpResponse(json.dumps(result, ensure_ascii=False), status_code=200, mimetype="application/json; charset=utf-8")
 
         # PERF headers
         total_ms = int((time.perf_counter() - t0_total) * 1000)

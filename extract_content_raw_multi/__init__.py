@@ -39,12 +39,51 @@ def _blue_ink_binary(pil_img: Image.Image) -> np.ndarray:
     # Tesseract için siyah üstüne beyaz metin (invert)
     return 255 - cleaned
 
-def _preprocess_handwriting_cv(pil_img: Image.Image) -> Image.Image:
-    bin_img = _blue_ink_binary(pil_img)
-    # Küçük açıklıkları kapat (harfler bütünleşsin)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
-    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
-    return Image.fromarray(bin_img).convert("L")
+def _preprocess_handwriting_cv(pil_img: Image.Image, fast: bool = False) -> Image.Image:
+    """
+    Çizgili defterde mavi mürekkebi öne çıkartıp yatay çizgileri bastırır.
+    Optimized for speed: reduced resize, simplified HSV, fewer iterations.
+    """
+    img = _cv_from_pil(pil_img)
+
+    # 1) 1.5x büyüt (LSTM küçük yazıda zorlanır, but faster than 2x)
+    resize_factor = 1.5 if not fast else 1.2
+    img = cv2.resize(img, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_CUBIC)
+
+    # 2) HSV ile mavi tonlarını vurgula (mürekkep mavi) - simplified
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    lower_blue = np.array([90, 50, 50])    # tighter range for speed
+    upper_blue = np.array([130, 255, 255])
+    mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    # 3) Gri + kontrast
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+
+    # 4) Yatay çizgileri (defter çizgileri) morfoloji ile bastır - fewer iterations
+    w = gray.shape[1]
+    k = max(15, w // 30)  # larger divisor for speed
+    horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1))
+    thr = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                cv2.THRESH_BINARY_INV, 35, 15)
+    horiz = cv2.morphologyEx(thr, cv2.MORPH_OPEN, horiz_kernel, iterations=1)
+    no_lines = cv2.bitwise_and(thr, cv2.bitwise_not(horiz))
+
+    # 5) Mavi maskesini ekle
+    ink = cv2.bitwise_or(no_lines, mask_blue)
+
+    # 6) Median + küçük açma ile pürüz azalt - skip if fast
+    if not fast:
+        ink = cv2.medianBlur(ink, 3)
+        small_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, small_kernel, iterations=1)
+
+    # 7) Tesseract için siyah üstüne beyaz metin (invert)
+    bin_img = cv2.bitwise_not(ink)
+
+    # OpenCV -> PIL (L) gri
+    pil_out = Image.fromarray(bin_img).convert("L")
+    return pil_out
 
 def _cv_from_pil(pil_img: Image.Image) -> np.ndarray:
     # PIL (RGB) -> OpenCV (BGR)

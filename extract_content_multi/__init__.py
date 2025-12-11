@@ -7,6 +7,8 @@ import pytesseract
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import cv2
+from transformers import AutoProcessor, AutoModelForCausalLM
+import torch
 def _blue_ink_binary(pil_img: Image.Image) -> np.ndarray:
     """Mavi mürekkebi vurgulayan ikili görüntü döndürür (0/255)."""
     bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -414,31 +416,38 @@ def _extract_image_bytes_with_ocr(data: bytes, lang="eng", fast: bool = False) -
         return {"errors":[f"Failed to open image: {e}"]}
 
     try:
-        g = _preprocess_handwriting_cv(img, fast=fast)  # ← optimized preprocessing
+        device_id = 0 if torch.cuda.is_available() else -1
+        device = f"cuda:{device_id}" if device_id >= 0 else "cpu"
 
-        if not _tesseract_lang_available(lang):
-            lang = "eng"
+        processor = AutoProcessor.from_pretrained("microsoft/Florence-2-base", trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-base", trust_remote_code=True, torch_dtype=torch.float32)
+        model.to(device)
+        model.eval()
 
-        best = ""
-        best_len = 0
-        # Limit PSM trials: default PSM 6, add 7 for handwriting if not fast
-        psms = [6] if fast else [6, 7]
-        for psm in psms:
-            cfg = f"--oem 1 --psm {psm} -c preserve_interword_spaces=1"
-            try:
-                tt = pytesseract.image_to_string(g, lang=lang, config=cfg) or ""
-            except Exception:
-                tt = ""
-            clen = len(re.sub(r"\s+", "", tt))
-            if clen > best_len:
-                best, best_len = tt, clen
+        prompt = "<OCR>"
+        inputs = processor(text=prompt, images=img, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        t = _normalize_text(best)
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024,
+                num_beams=3,
+            )
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        # Clean up the output
+        text = generated_text.strip()
+        if text.startswith("<OCR>"):
+            text = text[5:].strip()
+        text = text.replace("<pad>", "").replace("</s>", "").strip()
+        t = _normalize_text(text)
     except Exception as e:
         return {"errors":[f"OCR failed: {e}"]}
 
     page = {"page_number": 1, "text": t, "ocr_text": t, "links": [], "images": [], "artifacts": {
-        "debug": {"lang_used": lang, "engine": "tesseract", "note": "img pipeline"}
+        "debug": {"lang_used": lang, "engine": "florence-2", "note": "img pipeline"}
     }}
     return {"page_count": 1, "pages": [page], "errors": []}
 

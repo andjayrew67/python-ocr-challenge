@@ -239,29 +239,59 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
     t0 = time.perf_counter()
     with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as doc:
         page = doc.load_page(page_index_0)
-        native = (page.get_text("text") or "").strip()
         nonfooter_len = _non_footer_text_len(page)
         need_ocr = ((not fast and (nonfooter_len < NONFOOTER_MIN_CHARS)) or force_ocr or ((page_index_0 + 1) in FORCE_OCR_PAGES))
-        if not need_ocr and len(native) >= NONFOOTER_MIN_CHARS:
-            links = _collect_links(page)
-            footer_img = _footer_snapshot(page, page_index_0 + 1)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            return {
-                "text": native,
-                "ocr_text": _normalize_text(native),
-                "links": links,
-                "footer_img": footer_img,
-                "elapsed_ms": elapsed_ms
-            }
 
-        pix = page.get_pixmap(dpi=ocrdpi, alpha=False)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        best, best_len = "", 0
-        for psm in (6, 4):
-            t = _ocr_page_image(img, lang=lang, psm=psm)
-            clen = len(re.sub(r"\s+", "", t))
-            if clen > best_len: best, best_len = t, clen
-        ocr_text = best
+        # Use pdfplumber for text extraction and OCR
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
+                pl_page = pdf.pages[page_index_0]
+                native = pl_page.extract_text() or ""
+                native_stripped = native.strip()
+                if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
+                    links = _collect_links(page)
+                    footer_img = _footer_snapshot(page, page_index_0 + 1)
+                    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                    return {
+                        "text": native,
+                        "ocr_text": _normalize_text(native),
+                        "links": links,
+                        "footer_img": footer_img,
+                        "elapsed_ms": elapsed_ms
+                    }
+
+                # OCR
+                image = pl_page.to_image(resolution=ocrdpi)
+                pil_img = image.original
+                ocr_text = pytesseract.image_to_string(pil_img, lang=lang) or ""
+        except Exception:
+            # Fallback to fitz for text and OCR
+            native = page.get_text("text") or ""
+            native_stripped = native.strip()
+            if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
+                links = _collect_links(page)
+                footer_img = _footer_snapshot(page, page_index_0 + 1)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                return {
+                    "text": native,
+                    "ocr_text": _normalize_text(native),
+                    "links": links,
+                    "footer_img": footer_img,
+                    "elapsed_ms": elapsed_ms
+                }
+
+            # Fallback OCR
+            pix = page.get_pixmap(dpi=ocrdpi, alpha=False)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            best, best_len = "", 0
+            for psm in (6, 4):
+                t = _ocr_page_image(img, lang=lang, psm=psm)
+                clen = len(re.sub(r"\s+", "", t))
+                if clen > best_len: best, best_len = t, clen
+            ocr_text = best
+            native = native  # already set
+
         merged, seen = [], set()
         for ln in (native.splitlines() + ocr_text.splitlines()):
             s = (ln or "").strip()

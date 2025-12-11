@@ -656,7 +656,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         t0_total = time.perf_counter()
 
         # Query params
-        forceocr = True; fast = False; lang = "eng"; pages_arg = None; ocrdpi = 400
+        forceocr = False; fast = False; lang = "eng"; pages_arg = None; ocrdpi = 400
         workers = None; preocr = False; tables_engine = None; tables_out = None; want_images = False
         if "?" in req.url:
             from urllib.parse import parse_qs

@@ -52,9 +52,10 @@ def _cv_from_pil(pil_img: Image.Image) -> np.ndarray:
     # PIL (RGB) -> OpenCV (BGR)
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-def _preprocess_handwriting_cv(pil_img: Image.Image) -> Image.Image:
+def _preprocess_handwriting_cv(pil_img: Image.Image, fast: bool = False) -> Image.Image:
     """
     Çizgili defterde mavi mürekkebi öne çıkartıp yatay çizgileri bastırır.
+    Optimized for speed: reduced resize, simplified HSV, fewer iterations.
     """
     img = _cv_from_pil(pil_img)
 
@@ -87,10 +88,11 @@ def _preprocess_handwriting_cv(pil_img: Image.Image) -> Image.Image:
     # 5) Mavi maskesini de ekleyip yazıyı güçlendir
     ink = cv2.bitwise_or(no_lines, mask_blue)
 
-    # 6) Median + küçük açma ile pürüz azalt
-    ink = cv2.medianBlur(ink, 3)
-    small_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, small_kernel, iterations=1)
+    # 6) Median + küçük açma ile pürüz azalt - skip if fast
+    if not fast:
+        ink = cv2.medianBlur(ink, 3)
+        small_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, small_kernel, iterations=1)
 
     # 7) Tesseract için siyah üstüne beyaz metin (invert)
     bin_img = cv2.bitwise_not(ink)
@@ -188,12 +190,13 @@ def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
     g = g.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
     return g
 
-def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6) -> str:
+def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6, fast: bool = False) -> str:
     g = _preprocess_for_ocr(img)
     if not _tesseract_lang_available(lang):
         lang = "eng"
     best, best_len = "", 0
-    for p in (psm, 3, 4):  # mevcut psm + fallback
+    psms = [psm] if fast else [psm, 3, 4]
+    for p in psms:  # mevcut psm + fallback
         try:
             tt = pytesseract.image_to_string(g, lang=lang, config=f"--oem 3 --psm {p}") or ""
         except Exception:
@@ -284,11 +287,12 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
                 }
 
             # Fallback OCR
-            pix = page.get_pixmap(dpi=ocrdpi, alpha=False)
+            pix = page.get_pixmap(dpi=ocrdpi, alpha=False, colorspace=fitz.csGRAY)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
             best, best_len = "", 0
-            for psm in (6, 4):
-                t = _ocr_page_image(img, lang=lang, psm=psm)
+            psms = [6] if fast else [6, 4]
+            for psm in psms:
+                t = _ocr_page_image(img, lang=lang, psm=psm, fast=fast)
                 clen = len(re.sub(r"\s+", "", t))
                 if clen > best_len: best, best_len = t, clen
             ocr_text = best

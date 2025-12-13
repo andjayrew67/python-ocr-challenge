@@ -883,7 +883,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "fileSize": round(file_size_mb, 2),
             "status": "Completed" if not file_result.get("errors") else "Failed",
             "error": "; ".join(file_result.get("errors", [])) if file_result.get("errors") else "",
-            "content": raw_out
+            "fileContent": raw_out
         }
         resp = func.HttpResponse(json.dumps(result, ensure_ascii=False), status_code=200, mimetype="application/json; charset=utf-8")
 

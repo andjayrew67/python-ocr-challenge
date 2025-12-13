@@ -7,6 +7,8 @@ import pytesseract
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import cv2
+from transformers import AutoProcessor, AutoModelForCausalLM
+import torch
 def _blue_ink_binary(pil_img: Image.Image) -> np.ndarray:
     """Mavi mürekkebi vurgulayan ikili görüntü döndürür (0/255)."""
     bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -50,9 +52,10 @@ def _cv_from_pil(pil_img: Image.Image) -> np.ndarray:
     # PIL (RGB) -> OpenCV (BGR)
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-def _preprocess_handwriting_cv(pil_img: Image.Image) -> Image.Image:
+def _preprocess_handwriting_cv(pil_img: Image.Image, fast: bool = False) -> Image.Image:
     """
     Çizgili defterde mavi mürekkebi öne çıkartıp yatay çizgileri bastırır.
+    Optimized for speed: reduced resize, simplified HSV, fewer iterations.
     """
     img = _cv_from_pil(pil_img)
 
@@ -85,10 +88,11 @@ def _preprocess_handwriting_cv(pil_img: Image.Image) -> Image.Image:
     # 5) Mavi maskesini de ekleyip yazıyı güçlendir
     ink = cv2.bitwise_or(no_lines, mask_blue)
 
-    # 6) Median + küçük açma ile pürüz azalt
-    ink = cv2.medianBlur(ink, 3)
-    small_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, small_kernel, iterations=1)
+    # 6) Median + küçük açma ile pürüz azalt - skip if fast
+    if not fast:
+        ink = cv2.medianBlur(ink, 3)
+        small_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, small_kernel, iterations=1)
 
     # 7) Tesseract için siyah üstüne beyaz metin (invert)
     bin_img = cv2.bitwise_not(ink)
@@ -186,12 +190,13 @@ def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
     g = g.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
     return g
 
-def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6) -> str:
+def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6, fast: bool = False) -> str:
     g = _preprocess_for_ocr(img)
     if not _tesseract_lang_available(lang):
         lang = "eng"
     best, best_len = "", 0
-    for p in (psm, 3, 4):  # mevcut psm + fallback
+    psms = [psm] if fast else [psm, 3, 4]
+    for p in psms:  # mevcut psm + fallback
         try:
             tt = pytesseract.image_to_string(g, lang=lang, config=f"--oem 3 --psm {p}") or ""
         except Exception:
@@ -239,29 +244,60 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
     t0 = time.perf_counter()
     with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as doc:
         page = doc.load_page(page_index_0)
-        native = (page.get_text("text") or "").strip()
         nonfooter_len = _non_footer_text_len(page)
         need_ocr = ((not fast and (nonfooter_len < NONFOOTER_MIN_CHARS)) or force_ocr or ((page_index_0 + 1) in FORCE_OCR_PAGES))
-        if not need_ocr and len(native) >= NONFOOTER_MIN_CHARS:
-            links = _collect_links(page)
-            footer_img = _footer_snapshot(page, page_index_0 + 1)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            return {
-                "text": native,
-                "ocr_text": _normalize_text(native),
-                "links": links,
-                "footer_img": footer_img,
-                "elapsed_ms": elapsed_ms
-            }
 
-        pix = page.get_pixmap(dpi=ocrdpi, alpha=False)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        best, best_len = "", 0
-        for psm in (6, 4):
-            t = _ocr_page_image(img, lang=lang, psm=psm)
-            clen = len(re.sub(r"\s+", "", t))
-            if clen > best_len: best, best_len = t, clen
-        ocr_text = best
+        # Use pdfplumber for text extraction and OCR
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
+                pl_page = pdf.pages[page_index_0]
+                native = pl_page.extract_text() or ""
+                native_stripped = native.strip()
+                if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
+                    links = _collect_links(page)
+                    footer_img = _footer_snapshot(page, page_index_0 + 1)
+                    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                    return {
+                        "text": native,
+                        "ocr_text": _normalize_text(native),
+                        "links": links,
+                        "footer_img": footer_img,
+                        "elapsed_ms": elapsed_ms
+                    }
+
+                # OCR
+                image = pl_page.to_image(resolution=ocrdpi)
+                pil_img = image.original
+                ocr_text = pytesseract.image_to_string(pil_img, lang=lang) or ""
+        except Exception:
+            # Fallback to fitz for text and OCR
+            native = page.get_text("text") or ""
+            native_stripped = native.strip()
+            if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
+                links = _collect_links(page)
+                footer_img = _footer_snapshot(page, page_index_0 + 1)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                return {
+                    "text": native,
+                    "ocr_text": _normalize_text(native),
+                    "links": links,
+                    "footer_img": footer_img,
+                    "elapsed_ms": elapsed_ms
+                }
+
+            # Fallback OCR
+            pix = page.get_pixmap(dpi=ocrdpi, alpha=False, colorspace=fitz.csGRAY)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            best, best_len = "", 0
+            psms = [6] if fast else [6, 4]
+            for psm in psms:
+                t = _ocr_page_image(img, lang=lang, psm=psm, fast=fast)
+                clen = len(re.sub(r"\s+", "", t))
+                if clen > best_len: best, best_len = t, clen
+            ocr_text = best
+            native = native  # already set
+
         merged, seen = [], set()
         for ln in (native.splitlines() + ocr_text.splitlines()):
             s = (ln or "").strip()
@@ -382,29 +418,38 @@ def _extract_image_bytes_with_ocr(data: bytes, lang="eng") -> dict:
         return {"errors":[f"Failed to open image: {e}"]}
 
     try:
-        g = _preprocess_handwriting_cv(img)  # ← yeni ön-işleme
+        device_id = 0 if torch.cuda.is_available() else -1
+        device = f"cuda:{device_id}" if device_id >= 0 else "cpu"
 
-        if not _tesseract_lang_available(lang):
-            lang = "eng"
+        processor = AutoProcessor.from_pretrained("microsoft/Florence-2-base", trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-base", trust_remote_code=True, torch_dtype=torch.float32)
+        model.to(device)
+        model.eval()
 
-        best = ""
-        best_len = 0
-        for psm in (6, 7, 11, 13):  # çok satırlı el yazısında çoğu zaman 6 veya 7 daha iyi
-            cfg = f"--oem 1 --psm {psm} -c preserve_interword_spaces=1"
-            try:
-                tt = pytesseract.image_to_string(g, lang=lang, config=cfg) or ""
-            except Exception:
-                tt = ""
-            clen = len(re.sub(r"\s+", "", tt))
-            if clen > best_len:
-                best, best_len = tt, clen
+        prompt = "<OCR>"
+        inputs = processor(text=prompt, images=img, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        t = _normalize_text(best)
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024,
+                num_beams=3,
+            )
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        # Clean up the output
+        text = generated_text.strip()
+        if text.startswith("<OCR>"):
+            text = text[5:].strip()
+        text = text.replace("<pad>", "").replace("</s>", "").strip()
+        t = _normalize_text(text)
     except Exception as e:
         return {"errors":[f"OCR failed: {e}"]}
 
     page = {"page_number": 1, "text": t, "ocr_text": t, "links": [], "images": [], "artifacts": {
-        "debug": {"lang_used": lang, "engine": "tesseract", "note": "img pipeline"}
+        "debug": {"lang_used": lang, "engine": "florence-2", "note": "img pipeline"}
     }}
     return {"page_count": 1, "pages": [page], "errors": []}
 

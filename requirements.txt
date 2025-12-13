@@ -90,8 +90,11 @@ tifffile==2025.10.16
 torch==2.9.0
 torchgen==0.0.1
 torchvision==0.24.0
+transformers==4.46.3
 typing-extensions==4.15.0
 tzdata==2025.2
 wrapt==1.17.3
 xlrd==2.0.1
 xlsxwriter==3.2.9
+timm
+einops

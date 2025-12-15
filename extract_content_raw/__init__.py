@@ -682,17 +682,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         file_size_mb = len(data) / (1024 * 1024)
 
         # Validation
-        if file_size_mb > 100:
-            return func.HttpResponse("File size exceeds 100 MB limit.", status_code=500)
+        if file_size_mb > 50:
+            return func.HttpResponse(f"File size exceeds 50 MB limit for '{fname}'.", status_code=400)
 
         if _is_pdf(fname, ctype):
             try:
                 with fitz.open(stream=io.BytesIO(data), filetype="pdf") as doc_tmp:
                     total_pages = doc_tmp.page_count
             except Exception:
-                return func.HttpResponse("Invalid PDF file.", status_code=500)
-            if total_pages > 500:
-                return func.HttpResponse("PDF has more than 500 pages.", status_code=500)
+                return func.HttpResponse(f"{fname} is invalid PDF file.", status_code=400)
+            if total_pages > 300:
+                return func.HttpResponse(f"File '{fname}' has more than 300 pages.", status_code=400)
 
         out_results = []
 

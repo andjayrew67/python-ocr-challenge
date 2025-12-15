@@ -1,14 +1,14 @@
 name: azure-functions-python-app-containerized-deployment
 
 env:
-  AZURE_FUNCTIONAPP_NAME: "ExtractFileContent"
-  SLOT_NAME: "stage"
+  AZURE_FUNCTIONAPP_NAME: "DocExtraction"
+  # SLOT_NAME: "stage"
   PYTHON_VERSION: "3.11"
-  IMAGE_NAME: docservice
-  IMAGE_TAG: v2
-  AZURE_REGISTRY_LOGIN_SERVER: ${{ secrets.BASTION_GPT_EXTRACT_FILE_CONTENT_ACR_ENDPOINT }}
-  AZURE_REGISTRY_SERVER_NAME: ${{ secrets.BASTION_GPT_EXTRACT_FILE_CONTENT_ACR_USERNAME }}
-  AZURE_REGISTRY_USERNAME: ${{ secrets.BASTION_GPT_EXTRACT_FILE_CONTENT_ACR_USERNAME }}
+  IMAGE_NAME: docextraction
+  IMAGE_TAG: v1
+  AZURE_REGISTRY_LOGIN_SERVER: ${{ secrets.BASTION_GPT_DOC_EXTRACTION_CONTENT_ACR_ENDPOINT }}
+  AZURE_REGISTRY_SERVER_NAME: ${{ secrets.BASTION_GPT_DOC_EXTRACTION_CONTENT_ACR_USERNAME }}
+  AZURE_REGISTRY_USERNAME: ${{ secrets.BASTION_GPT_DOC_EXTRACTION_CONTENT_ACR_USERNAME }}
 
 # Controls when the workflow will run
 on:
@@ -75,7 +75,7 @@ jobs:
         with:
           app-name: ${{env.AZURE_FUNCTIONAPP_NAME}}
           image: ${{ env.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          slot-name: ${{ env.SLOT_NAME }}
+          # slot-name: ${{ env.SLOT_NAME }}
 
 
       # Remove docker image locally after pushing to ACR

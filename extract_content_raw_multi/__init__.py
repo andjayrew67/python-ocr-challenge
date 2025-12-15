@@ -723,9 +723,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             }
 
             # Validation
-            if file_size_mb > 100:
+            if file_size_mb > 50:
                 file_result["status"] = "Failed"
-                file_result["error"] = "File size exceeds 100 MB limit."
+                file_result["error"] = f"File size exceeds 50 MB limit for '{fname}'."
                 response_list.append(file_result)
                 continue
 
@@ -735,12 +735,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         total_pages = doc_tmp.page_count
                 except Exception:
                     file_result["status"] = "Failed"
-                    file_result["error"] = "Invalid PDF file."
+                    file_result["error"] = f"'{fname}' is invalid PDF file."
                     response_list.append(file_result)
                     continue
-                if total_pages > 500:
+                if total_pages > 300:
                     file_result["status"] = "Failed"
-                    file_result["error"] = "PDF has more than 500 pages."
+                    file_result["error"] = f"File '{fname}' has more than 300 pages."
                     response_list.append(file_result)
                     continue
 

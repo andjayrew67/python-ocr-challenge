@@ -828,16 +828,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
                         form_fields = pj.get("form_fields", [])
                         if form_fields:
-                            form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
-                            # Replace the form part in raw_text with structured form_str
-                            lines = raw_text.split('\n')
-                            try:
-                                # Find the start of form content (assuming "Gender" is the first form label)
-                                idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
-                                header = '\n'.join(lines[:idx])
-                                raw_text = header + '\n' + form_str
-                            except StopIteration:
-                                # If "Gender" not found, replace whole text with form_str
+                            form_str = "\n".join(f"{f.get('field_id', f.get('name', 'Unknown'))}: {f['value']}" for f in form_fields if f.get('value'))
+                            if raw_text:
+                                raw_text = raw_text + "\n\n--- Form Fields ---\n" + form_str
+                            else:
                                 raw_text = form_str
                         file_parts.append(f"---Page {pno}===\n{raw_text}\n")
 

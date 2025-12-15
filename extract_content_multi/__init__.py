@@ -859,7 +859,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     file_result["status"] = "Failed"
                     file_result["error"] = "; ".join(file_json["errors"])
                 else:
-                    file_result["fileContent"] = json.dumps(file_json, ensure_ascii=False)
+                    file_result["fileContent"] = file_json
 
             except Exception as e:
                 file_result["status"] = "Failed"
@@ -867,7 +867,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             response_list.append(file_result)
 
-        result = response_list
+        result = {"results": response_list}
         resp = func.HttpResponse(json.dumps(result, ensure_ascii=False, indent=2),
                                   mimetype="application/json; charset=utf-8")
         # Perf header'ları

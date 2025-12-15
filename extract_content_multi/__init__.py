@@ -227,15 +227,19 @@ def _collect_form_fields(page: fitz.Page):
     fields = []
     try:
         widgets = page.widgets()
+        
         for w in widgets:
-            name  = getattr(w, "field_name", None) or getattr(w, "name", None)
-            ftype = getattr(w, "field_type", None)
+            field_name = getattr(w, "field_name", None) or getattr(w, "name", None)
             value = getattr(w, "field_value", None)
-            if value is None: value = getattr(w, "value", None)
-            rect  = getattr(w, "rect", None)
-            bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
-            fields.append({"name": name, "type": ftype, "value": value, "bbox": bbox})
-    except Exception: pass
+            if value is None: 
+                value = getattr(w, "value", None)
+            
+            fields.append({
+                "field_id": field_name, 
+                "value": value
+            })
+    except Exception: 
+        pass
     return fields
 
 def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang: str, ocrdpi: int, fast: bool):

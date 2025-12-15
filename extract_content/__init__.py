@@ -9,6 +9,7 @@ import numpy as np
 import cv2
 from transformers import AutoProcessor, AutoModelForCausalLM
 import torch
+from doc_converter import convert_doc_to_docx
 def _blue_ink_binary(pil_img: Image.Image) -> np.ndarray:
     """Mavi mürekkebi vurgulayan ikili görüntü döndürür (0/255)."""
     bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -342,8 +343,21 @@ def _is_excel(fname, ctype):
 def _is_csv(fname, ctype):
     ext = os.path.splitext(fname.lower())[1]
     return ext == ".csv" or (ctype or "") in {"text/csv","application/csv"}
+def _is_doc(fname, ctype):
+    ext = os.path.splitext(fname.lower())[1]
+    return ext == ".doc" or (ctype or "") in {"application/msword"}
 
 # ---- Word / PPTX / TXT / IMG / HTML / RTF ----
+def _extract_doc_bytes(data: bytes, filename: str) -> dict:
+    """Extract from .doc files by converting to .docx first using LibreOffice."""
+    docx_bytes, error = convert_doc_to_docx(data, filename)
+    if error:
+        return {"errors": [f"DOC conversion error: {error}"]}
+    if not docx_bytes:
+        return {"errors": ["DOC conversion produced no output"]}
+    # Process the converted DOCX
+    return _extract_docx_bytes(docx_bytes)
+
 def _extract_docx_bytes(data: bytes) -> dict:
     try: import docx
     except Exception as e: return {"errors":[f"python-docx not available: {e}"]}
@@ -813,6 +827,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                 elif _is_pptx(fname, ctype):
                     res = _extract_pptx_bytes(data)
+                    if res.get("errors"): file_result["errors"].extend(res["errors"])
+                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+
+                elif _is_doc(fname, ctype):
+                    res = _extract_doc_bytes(data, fname)
                     if res.get("errors"): file_result["errors"].extend(res["errors"])
                     else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
 

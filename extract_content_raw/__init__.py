@@ -395,6 +395,9 @@ def _extract_txt_bytes(data: bytes, encoding_guess="utf-8") -> dict:
 def _extract_image_bytes_with_ocr(data: bytes, lang="eng") -> dict:
     try:
         img = Image.open(io.BytesIO(data))
+        # Convert to RGB to handle PNG with transparency and other formats
+        if img.mode != "RGB":
+            img = img.convert("RGB")
     except Exception as e:
         return {"errors":[f"Failed to open image: {e}"]}
 

@@ -10,6 +10,7 @@ import numpy as np
 import cv2
 from transformers import AutoProcessor, AutoModelForCausalLM
 import torch
+from doc_converter import convert_doc_to_docx
 def _blue_ink_binary(pil_img: Image.Image) -> np.ndarray:
     """Mavi mürekkebi vurgulayan ikili görüntü döndürür (0/255)."""
     bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -288,15 +289,19 @@ def _collect_form_fields(page: fitz.Page):
     fields = []
     try:
         widgets = page.widgets()
+        
         for w in widgets:
-            name  = getattr(w, "field_name", None) or getattr(w, "name", None)
-            ftype = getattr(w, "field_type", None)
+            field_name = getattr(w, "field_name", None) or getattr(w, "name", None)
             value = getattr(w, "field_value", None)
-            if value is None: value = getattr(w, "value", None)
-            rect  = getattr(w, "rect", None)
-            bbox  = [rect.x0, rect.y0, rect.x1, rect.y1] if rect is not None else None
-            fields.append({"name": name, "type": ftype, "value": value, "bbox": bbox})
-    except Exception: pass
+            if value is None: 
+                value = getattr(w, "value", None)
+            
+            fields.append({
+                "field_id": field_name, 
+                "value": value
+            })
+    except Exception: 
+        pass
     return fields
 
 # ---------- Tür kontrol & çıkarıcılar ----------
@@ -319,8 +324,21 @@ def _is_excel(fname, ctype):
 def _is_csv(fname, ctype):
     ext = os.path.splitext(fname.lower())[1]
     return ext == ".csv" or (ctype or "") in {"text/csv","application/csv"}
+def _is_doc(fname, ctype):
+    ext = os.path.splitext(fname.lower())[1]
+    return ext == ".doc" or (ctype or "") in {"application/msword"}
 
 # ---- Word / PPTX / TXT / IMG / HTML / RTF ----
+def _extract_doc_bytes(data: bytes, filename: str) -> dict:
+    """Extract from .doc files by converting to .docx first using LibreOffice."""
+    docx_bytes, error = convert_doc_to_docx(data, filename)
+    if error:
+        return {"errors": [f"DOC conversion error: {error}"]}
+    if not docx_bytes:
+        return {"errors": ["DOC conversion produced no output"]}
+    # Process the converted DOCX
+    return _extract_docx_bytes(docx_bytes)
+
 def _extract_docx_bytes(data: bytes) -> dict:
     try: import docx
     except Exception as e: return {"errors":[f"python-docx not available: {e}"]}
@@ -395,6 +413,9 @@ def _extract_txt_bytes(data: bytes, encoding_guess="utf-8") -> dict:
 def _extract_image_bytes_with_ocr(data: bytes, lang="eng") -> dict:
     try:
         img = Image.open(io.BytesIO(data))
+        # Convert to RGB to handle PNG with transparency and other formats
+        if img.mode != "RGB":
+            img = img.convert("RGB")
     except Exception as e:
         return {"errors":[f"Failed to open image: {e}"]}
 
@@ -712,37 +733,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     except Exception as e:
                         file_result["errors"].append(f"PDF open/process failed: {e}")
                         out_results.append(file_result)
-                        parts = []
-                        for fr in out_results:
-                            fname = fr.get("filename") or "file"
-                            pages = fr.get("pages") or []
-                            parts.append(f"===File: {fname}===")
-                            if not pages:
-                                errs = fr.get("errors") or []
-                                if errs:
-                                    parts.append(f"(no pages) Errors: {', '.join(errs)}")
-                                continue
-                            # sayfaları sırala ve yaz
-                            pages_sorted = sorted(pages, key=lambda x: x.get("page_number") or 0)
-                            for pj in pages_sorted:
-                                pno = pj.get("page_number")
-                                raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
-                                form_fields = pj.get("form_fields", [])
-                                if form_fields:
-                                    form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
-                                    # Replace the form part in raw_text with structured form_str
-                                    lines = raw_text.split('\n')
-                                    try:
-                                        # Find the start of form content (assuming "Gender" is the first form label)
-                                        idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
-                                        header = '\n'.join(lines[:idx])
-                                        raw_text = header + '\n' + form_str
-                                    except StopIteration:
-                                        # If "Gender" not found, replace whole text with form_str
-                                        raw_text = form_str
-                                parts.append(f"---Page {pno} Text---\n{raw_text}\n")
-
-                        raw_out = "\n".join(parts) + "\n"
 
                     indices = _expand_pages(pages_arg, total_pages)
                     pages_json = []
@@ -800,6 +790,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
                 elif _is_pptx(fname, ctype):
                     res = _extract_pptx_bytes(data)
+                    if res.get("errors"): file_result["errors"].extend(res["errors"])
+                    else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
+
+                elif _is_doc(fname, ctype):
+                    res = _extract_doc_bytes(data, fname)
                     if res.get("errors"): file_result["errors"].extend(res["errors"])
                     else: file_result.update({"page_count": res["page_count"], "pages": res["pages"]})
 
@@ -863,16 +858,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 raw_text = (pj.get("ocr_text") or pj.get("text") or "").replace("\r\n","\n").strip()
                 form_fields = pj.get("form_fields", [])
                 if form_fields:
-                    form_str = "\n".join(f"{f['name']}: {f['value']}" for f in form_fields if f.get('name'))
-                    # Replace the form part in raw_text with structured form_str
-                    lines = raw_text.split('\n')
-                    try:
-                        # Find the start of form content (assuming "Gender" is the first form label)
-                        idx = next(i for i, line in enumerate(lines) if 'Gender' in line.strip())
-                        header = '\n'.join(lines[:idx])
-                        raw_text = header + '\n' + form_str
-                    except StopIteration:
-                        # If "Gender" not found, replace whole text with form_str
+                    form_str = "\n".join(f"{f.get('field_id', f.get('name', 'Unknown'))}: {f['value']}" for f in form_fields if f.get('value'))
+                    if raw_text:
+                        raw_text = raw_text + "\n\n--- Form Fields ---\n" + form_str
+                    else:
                         raw_text = form_str
                 parts.append(f"---Page {pno} Text---\n{raw_text}\n")
 

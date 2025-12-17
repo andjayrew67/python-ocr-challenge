@@ -2,21 +2,18 @@
 FROM mcr.microsoft.com/azure-functions/python:4-python3.11
 
 ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
-    AzureFunctionsJobHost__Logging__Console__IsEnabled=true \
-    PYTHONUNBUFFERED=1
+    AzureFunctionsJobHost__Logging__Console__IsEnabled=true
 
-# Install system-level dependencies (OCR, LibreOffice, Pandoc, etc.)
+# Install system-level dependencies (OCR,LibreOffice, Pandoc, etc.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    libtesseract-dev \
-    libleptonica-dev \
-    pandoc \
-    libreoffice \
-    libreoffice-writer \
-    uno \
-    python3-uno \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        libtesseract-dev \
+        libleptonica-dev \
+        pandoc \
+        libreoffice \
+        libreoffice-writer \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

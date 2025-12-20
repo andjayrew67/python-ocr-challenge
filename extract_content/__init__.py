@@ -155,16 +155,22 @@ def _normalize_text(text: str) -> str:
     return text
 
 def _non_footer_text_len(page: fitz.Page) -> int:
-    r = page.rect; footer_y0 = r.y1 - r.height * FOOTER_RATIO
+    r = page.rect
+    footer_y0 = r.y1 - r.height * FOOTER_RATIO  # top of footer
     total = 0
     try:
         blocks = page.get_text("blocks") or []
         for b in blocks:
             if len(b) < 5: continue
-            x0, y0, x1, y1, txt = b[0], b[1], b[2], b[3], b[4] or ""
+            x0, y0, x1, y1, txt = b[:5]
             if y1 <= footer_y0: total += len((txt or "").strip())
+        # Add form fields
+        for w in page.widgets():
+            if w.rect.y1 <= footer_y0:
+                total += len((w.field_value or "").strip())
     except Exception: pass
     return total
+
 def _preprocess_handwriting(img: Image.Image) -> Image.Image:
     """
     Defter çizgilerini baskılamak ve mavi mürekkebi öne çıkarmak için hafif bir ön-işleme.
@@ -207,6 +213,33 @@ def _ocr_page_image(img: Image.Image, lang: str = "eng", psm=6, fast: bool = Fal
             best, best_len = tt, clen
     return (best or "").strip()
 
+def _extract_text_with_forms(page: fitz.Page) -> str:
+    words = page.get_text("words")  # list of (x0,y0,x1,y1,word,block_no,line_no,word_no)
+    all_spans = words
+    if not all_spans:
+        return ""
+    # Sort by y0 (top to bottom), then x0 (left to right)
+    all_spans.sort(key=lambda sp: (sp[1], sp[0]))
+    lines = []
+    current_line = [all_spans[0]]
+    for sp in all_spans[1:]:
+        prev_sp = current_line[-1]
+        # If the new span starts below the previous span's bottom with some tolerance
+        if sp[1] > prev_sp[3] + 2:  # y0 > prev_y1 + 2
+            # Finish current line
+            current_line.sort(key=lambda s: s[0])  # sort by x0
+            line_text = " ".join(s[4] for s in current_line).strip()
+            lines.append(line_text)
+            current_line = [sp]
+        else:
+            current_line.append(sp)
+    # Last line
+    if current_line:
+        current_line.sort(key=lambda s: s[0])
+        line_text = " ".join(s[4] for s in current_line).strip()
+        lines.append(line_text)
+    text = "\n".join(lines)
+    return text
 
 def _collect_links(page: fitz.Page):
     out = []
@@ -252,45 +285,30 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
         nonfooter_len = _non_footer_text_len(page)
         need_ocr = ((not fast and (nonfooter_len < NONFOOTER_MIN_CHARS)) or force_ocr or ((page_index_0 + 1) in FORCE_OCR_PAGES))
 
-        # Use pdfplumber for text extraction and OCR
+        native = _extract_text_with_forms(page)
+        native_stripped = native.strip()
+        if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
+            links = _collect_links(page)
+            footer_img = _footer_snapshot(page, page_index_0 + 1)
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            return {
+                "text": native,
+                "ocr_text": _normalize_text(native),
+                "links": links,
+                "footer_img": footer_img,
+                "elapsed_ms": elapsed_ms
+            }
+
+        # OCR
+        ocr_text = ""
         try:
             import pdfplumber
             with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
                 pl_page = pdf.pages[page_index_0]
-                native = pl_page.extract_text() or ""
-                native_stripped = native.strip()
-                if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
-                    links = _collect_links(page)
-                    footer_img = _footer_snapshot(page, page_index_0 + 1)
-                    elapsed_ms = int((time.perf_counter() - t0) * 1000)
-                    return {
-                        "text": native,
-                        "ocr_text": _normalize_text(native),
-                        "links": links,
-                        "footer_img": footer_img,
-                        "elapsed_ms": elapsed_ms
-                    }
-
-                # OCR
                 image = pl_page.to_image(resolution=ocrdpi)
                 pil_img = image.original
                 ocr_text = pytesseract.image_to_string(pil_img, lang=lang) or ""
         except Exception:
-            # Fallback to fitz for text and OCR
-            native = page.get_text("text") or ""
-            native_stripped = native.strip()
-            if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
-                links = _collect_links(page)
-                footer_img = _footer_snapshot(page, page_index_0 + 1)
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
-                return {
-                    "text": native,
-                    "ocr_text": _normalize_text(native),
-                    "links": links,
-                    "footer_img": footer_img,
-                    "elapsed_ms": elapsed_ms
-                }
-
             # Fallback OCR
             pix = page.get_pixmap(dpi=ocrdpi, alpha=False, colorspace=fitz.csGRAY)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
@@ -301,7 +319,6 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
                 clen = len(re.sub(r"\s+", "", t))
                 if clen > best_len: best, best_len = t, clen
             ocr_text = best
-            native = native  # already set
 
         merged, seen = [], set()
         for ln in (native.splitlines() + ocr_text.splitlines()):

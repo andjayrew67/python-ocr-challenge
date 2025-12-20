@@ -13,36 +13,66 @@ from typing import Optional, Tuple
 
 def _get_libreoffice_path() -> Optional[str]:
     """
-    Find the LibreOffice installation path on Windows.
+    Find the LibreOffice installation path on Windows or Linux.
     """
-    # Windows common install paths
-    common_paths = [
-        r"C:\Program Files\LibreOffice\program\soffice.exe",
-        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-        r"C:\Program Files\OpenOffice\program\soffice.exe",
-        r"C:\Program Files (x86)\OpenOffice\program\soffice.exe",
-    ]
-    
-    for path in common_paths:
-        if os.path.exists(path):
-            return path
-    
-    # Try to find via Windows PATH
-    try:
-        result = subprocess.run(
-            ["where", "soffice.exe"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            path = result.stdout.strip().split('\n')[0]
-            if os.path.exists(path):
+    if os.name == 'nt':  # Windows
+        # Windows common install paths
+        common_paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            r"C:\Program Files\OpenOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\OpenOffice\program\soffice.exe",
+        ]
+
+        for path in common_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
                 return path
-    except Exception:
-        pass
-    
-    return None
+
+        # Try to find via Windows PATH
+        try:
+            result = subprocess.run(
+                ["where", "soffice.exe"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                path = result.stdout.strip().split('\n')[0]
+                if os.path.exists(path):
+                    return path
+        except Exception:
+            pass
+
+        return None
+    else:  # Linux/Unix
+        # Common Linux install paths
+        common_paths = [
+            "/usr/bin/soffice",
+            "/usr/lib/libreoffice/program/soffice",
+            "/usr/lib64/libreoffice/program/soffice",
+            "/opt/libreoffice/program/soffice",
+        ]
+
+        for path in common_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return path
+
+        # Try to find via PATH
+        try:
+            result = subprocess.run(
+                ["which", "soffice"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                path = result.stdout.strip()
+                if path:
+                    return path
+        except Exception:
+            pass
+
+        return None
 
 
 def convert_doc_to_docx(doc_bytes: bytes, filename: str) -> Tuple[Optional[bytes], Optional[str]]:

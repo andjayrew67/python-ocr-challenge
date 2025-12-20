@@ -243,6 +243,34 @@ def _collect_form_fields(page: fitz.Page):
         pass
     return fields
 
+def _extract_text_with_forms(page: fitz.Page) -> str:
+    words = page.get_text("words")  # list of (x0,y0,x1,y1,word,block_no,line_no,word_no)
+    all_spans = words
+    if not all_spans:
+        return ""
+    # Sort by y0 (top to bottom), then x0 (left to right)
+    all_spans.sort(key=lambda sp: (sp[1], sp[0]))
+    lines = []
+    current_line = [all_spans[0]]
+    for sp in all_spans[1:]:
+        prev_sp = current_line[-1]
+        # If the new span starts below the previous span's bottom with some tolerance
+        if sp[1] > prev_sp[3] + 2:  # y0 > prev_y1 + 2
+            # Finish current line
+            current_line.sort(key=lambda s: s[0])  # sort by x0
+            line_text = " ".join(s[4] for s in current_line).strip()
+            lines.append(line_text)
+            current_line = [sp]
+        else:
+            current_line.append(sp)
+    # Last line
+    if current_line:
+        current_line.sort(key=lambda s: s[0])
+        line_text = " ".join(s[4] for s in current_line).strip()
+        lines.append(line_text)
+    text = "\n".join(lines)
+    return text
+
 def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang: str, ocrdpi: int, fast: bool):
     t0 = time.perf_counter()
     with fitz.open(stream=io.BytesIO(doc_bytes), filetype="pdf") as doc:
@@ -255,7 +283,7 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
             import pdfplumber
             with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
                 pl_page = pdf.pages[page_index_0]
-                native = pl_page.extract_text() or ""
+                native = _extract_text_with_forms(page)
                 native_stripped = native.strip()
                 if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
                     links = _collect_links(page)
@@ -275,7 +303,7 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
                 ocr_text = pytesseract.image_to_string(pil_img, lang=lang) or ""
         except Exception:
             # Fallback to fitz for text and OCR
-            native = page.get_text("text") or ""
+            native = _extract_text_with_forms(page)
             native_stripped = native.strip()
             if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
                 links = _collect_links(page)
@@ -723,19 +751,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             data = f.get("data") or b""
             file_size_mb = len(data) / (1024 * 1024)
 
-            file_result = {
-                "fileName": fname,
-                "fileSize": round(file_size_mb, 2),
-                "fileContent": None,
-                "status": "Completed",
-                "error": None
+            file_json = {
+                "filename": fname,
+                "mimetype": ctype or None,
+                "errors": []
             }
 
             # Validation
-            if file_size_mb > 50:
-                file_result["status"] = "Failed"
-                file_result["error"] = f"File size exceeds 50 MB limit for '{fname}'."
-                response_list.append(file_result)
+            if file_size_mb > 100:
+                file_json["errors"].append("File size exceeds 100 MB limit.")
+                response_list.append(file_json)
                 continue
 
             if _is_pdf(fname, ctype):
@@ -743,20 +768,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     with fitz.open(stream=io.BytesIO(data), filetype="pdf") as doc_tmp:
                         total_pages = doc_tmp.page_count
                 except Exception:
-                    file_result["status"] = "Failed"
-                    file_result["error"] = f"'{fname}' is invalid PDF file."
-                    response_list.append(file_result)
+                    file_json["errors"].append("Invalid PDF file.")
+                    response_list.append(file_json)
                     continue
-                if total_pages > 300:
-                    file_result["status"] = "Failed"
-                    file_result["error"] = f"File '{fname}' has more than 300 pages."
-                    response_list.append(file_result)
+                if total_pages > 500:
+                    file_json["errors"].append("PDF has more than 500 pages.")
+                    response_list.append(file_json)
                     continue
 
             # Process file (similar to single file logic)
             try:
-                file_json = {"filename": fname, "mimetype": ctype or None, "errors": []}
-
                 if _is_pdf(fname, ctype):
                     doc_bytes = data
                     if preocr:
@@ -768,9 +789,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                             total_pages = doc_tmp.page_count
                     except Exception as e:
                         file_json["errors"].append(f"PDF open/process failed: {e}")
-                        file_result["status"] = "Failed"
-                        file_result["error"] = f"PDF open/process failed: {e}"
-                        response_list.append(file_result)
+                        response_list.append(file_json)
                         continue
 
                     indices = _expand_pages(pages_arg, total_pages)
@@ -874,17 +893,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 else:
                     file_json["errors"].append("Not yet implemented (other formats).")
 
-                if file_json.get("errors"):
-                    file_result["status"] = "Failed"
-                    file_result["error"] = "; ".join(file_json["errors"])
-                else:
-                    file_result["fileContent"] = file_json
+                # No need to check errors here, always append
 
             except Exception as e:
-                file_result["status"] = "Failed"
-                file_result["error"] = f"Processing error: {e}"
+                file_json["errors"].append(f"Processing error: {e}")
 
-            response_list.append(file_result)
+            response_list.append(file_json)
 
         result = {"results": response_list}
         resp = func.HttpResponse(json.dumps(result, ensure_ascii=False, indent=2),

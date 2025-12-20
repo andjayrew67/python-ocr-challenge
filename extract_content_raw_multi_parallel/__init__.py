@@ -246,7 +246,7 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
             import pdfplumber
             with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
                 pl_page = pdf.pages[page_index_0]
-                native = pl_page.extract_text() or ""
+                native = _extract_text_with_forms(page)
                 native_stripped = native.strip()
                 if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
                     links = _collect_links(page)
@@ -264,7 +264,7 @@ def _page_text_or_ocr(doc_bytes: bytes, page_index_0: int, force_ocr: bool, lang
                 ocr_text = pytesseract.image_to_string(pil_img, lang=lang) or ""
         except Exception:
             # Fallback to fitz for text and OCR
-            native = page.get_text("text") or ""
+            native = _extract_text_with_forms(page)
             native_stripped = native.strip()
             if not need_ocr and len(native_stripped) >= NONFOOTER_MIN_CHARS:
                 links = _collect_links(page)
@@ -342,6 +342,34 @@ def _collect_form_fields(page: fitz.Page):
     except Exception: 
         pass
     return fields
+
+def _extract_text_with_forms(page: fitz.Page) -> str:
+    words = page.get_text("words")  # list of (x0,y0,x1,y1,word,block_no,line_no,word_no)
+    all_spans = words
+    if not all_spans:
+        return ""
+    # Sort by y0 (top to bottom), then x0 (left to right)
+    all_spans.sort(key=lambda sp: (sp[1], sp[0]))
+    lines = []
+    current_line = [all_spans[0]]
+    for sp in all_spans[1:]:
+        prev_sp = current_line[-1]
+        # If the new span starts below the previous span's bottom with some tolerance
+        if sp[1] > prev_sp[3] + 2:  # y0 > prev_y1 + 2
+            # Finish current line
+            current_line.sort(key=lambda s: s[0])  # sort by x0
+            line_text = " ".join(s[4] for s in current_line).strip()
+            lines.append(line_text)
+            current_line = [sp]
+        else:
+            current_line.append(sp)
+    # Last line
+    if current_line:
+        current_line.sort(key=lambda s: s[0])
+        line_text = " ".join(s[4] for s in current_line).strip()
+        lines.append(line_text)
+    text = "\n".join(lines)
+    return text
 
 # ---------- Tür kontrol & çıkarıcılar ----------
 def _is_pdf(fname, ctype):  return (ctype == "application/pdf") or fname.lower().endswith(".pdf")

@@ -9,13 +9,13 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
 # Install system-level dependencies (OCR,LibreOffice, Pandoc, etc.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    libtesseract-dev \
-    libleptonica-dev \
-    pandoc \
-    libreoffice \
-    libreoffice-writer \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        libtesseract-dev \
+        libleptonica-dev \
+        pandoc \
+        libreoffice \
+        libreoffice-writer \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

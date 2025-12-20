@@ -2,9 +2,7 @@
 FROM mcr.microsoft.com/azure-functions/python:4-python3.11
 
 ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
-    AzureFunctionsJobHost__Logging__Console__IsEnabled=true \
-    HOME=/tmp \
-    TMPDIR=/tmp
+    AzureFunctionsJobHost__Logging__Console__IsEnabled=true
 
 # Install system-level dependencies (OCR,LibreOffice, Pandoc, etc.)
 RUN apt-get update && \
